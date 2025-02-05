@@ -2,6 +2,7 @@ package com.hk.game.pieces;
 
 import com.badlogic.gdx.graphics.Color;
 import com.hk.engine.G2D;
+import powered.Blueprint;
 import powered.Side;
 import powered.World;
 
@@ -116,6 +117,12 @@ public class WirePiece extends Piece
 	public int cleanMeta(int oldMeta)
 	{
 		return oldMeta & 0xF0;
+	}
+
+	@Override
+	public void onPaste(World world, Blueprint blueprint, int x, int y)
+	{
+		onAdded(world, x, y);
 	}
 
 	@Override

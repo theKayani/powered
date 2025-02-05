@@ -347,7 +347,7 @@ public class Powered extends GuiScreen
 							world.getData(px + i, py + j).loadFromJson(snapshot.getData());
 					}
 					else
-						world.setPiece(i, j, Pieces.AIR, 0, 2);
+						world.setPiece(px + i, py + j, Pieces.AIR, 0, 2);
 				}
 			}
 
