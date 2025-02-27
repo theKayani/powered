@@ -8,46 +8,51 @@ import com.badlogic.gdx.math.Vector2;
 import com.hk.engine.G2D;
 import com.hk.engine.gui.GuiScreen;
 import com.hk.engine.gui.Main;
+import com.hk.game.pieces.Circuit;
 import com.hk.game.pieces.Piece;
 import com.hk.game.pieces.Pieces;
-import com.hk.json.JsonFormatException;
+import com.hk.json.Json;
+import com.hk.json.JsonObject;
 import com.hk.math.MathUtil;
 import com.hk.math.vector.Point;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class Powered extends GuiScreen
-{	
-	public final World world;
+{
+	private final LinkedList<World> worlds;
+	private final LinkedList<View> views;
+	public World rootWorld, world;
+	public View view;
 	public final int scl = 10;
-	private double zoom, moveX, moveY, lastX, lastY;
 	private boolean paused, step, dragging, isCopying, isCutting, isPasting;
-	private Point copyStart;
+	private boolean selectedCircuit, selectingCircuitIO;
+	private Point copyStart, circuitStart, ioStart;
 	private int selected, copySelected = -1;
 	private long msgTime = -1;
 	private String msg;
-	private boolean grid;
 	private Blueprint held;
+	private Circuit circuitToIO;
 	private final List<Blueprint> copied;
 	
 	public Powered(Main main)
 	{
 		super(main);
-		copied = new ArrayList<>();
-		world = new World(this, 256, 256);
+		worlds = new LinkedList<>();
+		views = new LinkedList<>();
+		rootWorld = world = new World(this, 256, 256, null);
+		view = new View();
 		reset();
-		grid = true;
+
+		copied = new ArrayList<>();
 	}
 
 	private void reset()
 	{
-		zoom = 2;
-		moveX = Main.WIDTH / 2F - (world.width * scl) / 2F;
-		moveY = Main.HEIGHT / 2F - (world.height * scl) / 2F;
+		view.moveX = Main.WIDTH / 2F - (world.width * scl) / 2F;
+		view.moveY = Main.HEIGHT / 2F - (world.height * scl) / 2F;
 
+		selectedCircuit = false;
 		selected = 1;
 		setMessage("Selected Wire", 2000);
 	}
@@ -62,23 +67,25 @@ public class Powered extends GuiScreen
 		boolean isLeftPressed = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
 		if(isRightPressed || isLeftPressed)
 		{
-			double dx = mx - lastX;
-			double dy = my - lastY;
+			double dx = mx - view.lastX;
+			double dy = my - view.lastY;
 			if(isRightPressed)
 			{
-				moveX += dx / zoom;
-				moveY += dy / zoom;
+				view.moveX += dx / view.zoom;
+				view.moveY += dy / view.zoom;
 			}
 
 			dragging = dragging || MathUtil.hypot(dx, dy) > 2;
 		}
 		else dragging = false;
-		lastX = mx;
-		lastY = my;
+		view.lastX = mx;
+		view.lastY = my;
 		
 		if(!paused || step)
 		{
-			world.updateWorld();
+			rootWorld.updateWorld();
+			if(step)
+				System.out.println("world.updates() = " + world.updates());
 			step = false;
 		}
 		
@@ -92,21 +99,20 @@ public class Powered extends GuiScreen
 	@Override
 	public void render(G2D g2d)
 	{
-		Gdx.graphics.setForegroundFPS(60);
-
-		float mouseX = Gdx.input.getX();
-		float mouseY = Gdx.input.getY();
+		Vector2 m = main.unproject(Gdx.input.getX(), Gdx.input.getY());
+		float mouseX = m.x;
+		float mouseY = m.y;
 		g2d.pushMatrix();
 
-		float zoomWidth = (float) (Main.WIDTH * zoom);
-		float zoomHeight = (float) (Main.HEIGHT * zoom);
+		float zoomWidth = (float) (Main.WIDTH * view.zoom);
+		float zoomHeight = (float) (Main.HEIGHT * view.zoom);
 
 		float anchorx = (Main.WIDTH - zoomWidth) / 2;
 		float anchory = (Main.HEIGHT - zoomHeight) / 2;
 
 		g2d.translate(anchorx, anchory);
-		g2d.scale((float) zoom, (float) zoom);
-		g2d.translate((float) moveX, (float) moveY);
+		g2d.scale((float) view.zoom, (float) view.zoom);
+		g2d.translate((float) view.moveX, (float) view.moveY);
 
 		Affine2 aft = applyCameraTransform().inv();
 		Vector2 mi = new Vector2(mouseX, mouseY);
@@ -116,42 +122,118 @@ public class Powered extends GuiScreen
 		aft.applyTo(min);
 		Vector2 max = new Vector2(Main.WIDTH, Main.HEIGHT);
 		aft.applyTo(max);
-		int startX = (int) Math.floor(min.x / scl);
-		int startY = (int) Math.floor(min.y / scl);
-		int endX = (int) Math.ceil(max.x / scl);
-		int endY = (int) Math.ceil(max.y / scl);
+		int sx = (int) Math.floor(min.x / scl);
+		int sy = (int) Math.floor(min.y / scl);
+		int ex = (int) Math.ceil(max.x / scl);
+		int ey = (int) Math.ceil(max.y / scl);
 
-		startX = MathUtil.between(0, startX, world.width);
-		startY = MathUtil.between(0, startY, world.height);
-		endX = MathUtil.between(0, endX, world.width);
-		endY = MathUtil.between(0, endY, world.height);
+		sx = MathUtil.between(-1, sx, world.width);
+		sy = MathUtil.between(-1, sy, world.height);
+		ex = MathUtil.between(-1, ex, world.width);
+		ey = MathUtil.between(-1, ey, world.height);
 
-		g2d.setColor(0, 0, 0, 60);
+		int startX = MathUtil.between(0, sx, world.width - 1);
+		int startY = MathUtil.between(0, sy, world.height - 1);
+		int endX = MathUtil.between(0, ex, world.width - 1);
+		int endY = MathUtil.between(0, ey, world.height - 1);
 
-		g2d.begin(false);
-		if(grid)
+		boolean outWest = sx != startX;
+		boolean outEast = ex != endX;
+		boolean outNorth = sy != startY;
+		boolean outSouth = ey != endY;
+		g2d.enableBlend();
+		if(view.grid)
 		{
-			for(int i = startX; i <= endX; i++)
-				g2d.drawLine(i * scl, startY * scl, i * scl, endY * scl);
-			for(int i = startY; i <= endY; i++)
-				g2d.drawLine(startX * scl, i * scl, endX * scl, i * scl);
+			g2d.begin(false);
+			if(world.hasParent() && (outWest || outNorth || outEast || outSouth))
+			{
+				g2d.setColor(192, 0, 0, 60);
+				if(outWest)
+				{
+					for (int i = startY; i <= endY + 1; i++)
+						g2d.drawLine(sx * scl, i * scl, sx * scl + scl, i * scl);
+				}
+				if(outEast)
+				{
+					for (int i = startY; i <= endY + 1; i++)
+						g2d.drawLine((ex + 1) * scl, i * scl, (ex + 1) * scl - scl, i * scl);
+				}
+				if(outNorth)
+				{
+					for (int i = startX; i <= endX + 1; i++)
+						g2d.drawLine(i * scl, sy * scl, i * scl, sy * scl + scl);
+				}
+				if(outSouth)
+				{
+					for (int i = startX; i <= endX + 1; i++)
+						g2d.drawLine(i * scl, (ey + 1) * scl, i * scl, (ey + 1) * scl - scl);
+				}
+			}
+			g2d.setColor(0, 0, 0, 60);
+			for(int i = startX; i <= endX + 1; i++)
+				g2d.drawLine(i * scl, startY * scl, i * scl, (endY + 1) * scl);
+			for(int i = startY; i <= endY + 1; i++)
+				g2d.drawLine(startX * scl, i * scl, (endX + 1) * scl, i * scl);
+			g2d.end();
 		}
 		else
 		{
+			g2d.begin(false);
+			if(world.hasParent() && (outWest || outNorth || outEast || outSouth))
+			{
+				g2d.setColor(192, 0, 0, 60);
+				if(outWest)
+					g2d.drawLine(sx * scl, sy * scl, sx * scl, (ey + 1) * scl);
+				if(outEast)
+					g2d.drawLine((ex + 1) * scl, sy * scl, (ex + 1) * scl, (ey + 1) * scl);
+				if(outNorth)
+					g2d.drawLine(sx * scl, sy * scl, (ex + 1) * scl, sy * scl);
+				if(outSouth)
+					g2d.drawLine(sx * scl, (ey + 1) * scl, (ex + 1) * scl, (ey + 1) * scl);
+			}
+			g2d.setColor(0, 0, 0, 60);
 			g2d.drawLine(0, 0, world.width * scl, 0);
 			g2d.drawLine(world.width * scl, 0, world.width * scl, world.width * scl);
 
 			g2d.drawLine(0, 0, 0, world.height * scl);
 			g2d.drawLine(0, world.height * scl, world.height * scl, world.height * scl);
+			g2d.end();
 		}
-		g2d.end();
+
+		if(world.hasParent() && (outWest || outNorth || outEast || outSouth))
+		{
+			Set<World.WorldPoint> edgeConnects = world.circuit.getEdgeConnects();
+			World.WorldPoint p;
+			g2d.setColor(192, 0, 0, 60);
+			g2d.begin(true);
+			for (int i = startX; i <= endX; i++)
+			{
+				p = new World.WorldPoint(world, i, sy);
+				if(outNorth && edgeConnects.contains(p))
+					g2d.drawRect(i * scl, sy * scl, scl, scl);
+				p = new World.WorldPoint(world, i, ey);
+				if(outSouth && edgeConnects.contains(p))
+					g2d.drawRect(i * scl, ey * scl, scl, scl);
+			}
+			for (int i = startY; i <= endY; i++)
+			{
+				if(outWest && edgeConnects.contains(new World.WorldPoint(world, sx, i)))
+					g2d.drawRect(sx * scl, i * scl, scl, scl);
+				if(outEast && edgeConnects.contains(new World.WorldPoint(world, ex, i)))
+					g2d.drawRect(ex * scl, i * scl, scl, scl);
+			}
+			g2d.end();
+		}
+		g2d.disableBlend();
 
 		g2d.setColor(Color.RED);
-		for(int x = startX; x < endX; x++)
+		for(int x = startX; x <= endX; x++)
 		{
-			for(int y = startY; y < endY; y++)
+			for(int y = startY; y <= endY; y++)
 			{
 				Tile tile = world.grid(x, y);
+				if(selectingCircuitIO && circuitToIO.contains(x, y))
+					continue;
 				Piece p = tile.getPiece();
 				if(p.isAir())
 					continue;
@@ -164,26 +246,39 @@ public class Powered extends GuiScreen
 		int selY = (int) Math.floor(mi.y / scl);
 		if(isCopying)
 		{
+			selX = MathUtil.between(0, selX, world.width - 1);
+			selY = MathUtil.between(0, selY, world.height - 1);
 			g2d.begin(false);
-			g2d.setColor(Color.GREEN);
+			int minX, minY, maxX, maxY;
+
 			if (copyStart != null)
 			{
-				int minX = Math.min(selX, copyStart.x);
-				int minY = Math.min(selY, copyStart.y);
-				int maxX = Math.max(selX, copyStart.x);
-				int maxY = Math.max(selY, copyStart.y);
-				g2d.drawRect(minX * scl, minY * scl, Math.abs(maxX - minX + 1) * scl, Math.abs(maxY - minY + 1) * scl);
+				minX = Math.min(selX, copyStart.x);
+				minY = Math.min(selY, copyStart.y);
+				maxX = Math.max(selX, copyStart.x);
+				maxY = Math.max(selY, copyStart.y);
 			}
+			else
+			{
+				minX = maxX = selX;
+				minY = maxY = selY;
+			}
+
+			g2d.setColor(Blueprint.canCopy(world, minX, minY, maxX, maxY) ? Color.GREEN : Color.RED);
+			if (copyStart != null)
+				g2d.drawRect(minX * scl, minY * scl, Math.abs(maxX - minX + 1) * scl, Math.abs(maxY - minY + 1) * scl);
 			else
 				g2d.drawRect(selX * scl, selY * scl, scl, scl);
 			g2d.end();
 		}
 		else if(isPasting)
 		{
+			g2d.enableBlend();
 			g2d.setColor(0.9F, 0.9F, 1F, 0.8F);
 			g2d.begin(true);
 			g2d.drawRect(selX * scl, selY * scl, held.width * scl, held.height * scl);
 			g2d.end();
+			g2d.disableBlend();
 
 			g2d.setColor(Color.BLUE);
 			g2d.begin(false);
@@ -191,12 +286,98 @@ public class Powered extends GuiScreen
 			g2d.end();
 			held.paintBlueprint(g2d, selX * scl, selY * scl);
 		}
+		else if(selectedCircuit)
+		{
+			selX = MathUtil.between(0, selX, world.width - 1);
+			selY = MathUtil.between(0, selY, world.height - 1);
+			int minX, minY;
+			int width, height;
+			if (circuitStart != null)
+			{
+				minX = Math.min(selX, circuitStart.x);
+				minY = Math.min(selY, circuitStart.y);
+				width = Math.abs(Math.max(selX, circuitStart.x) - minX + 1);
+				height = Math.abs(Math.max(selY, circuitStart.y) - minY + 1);
+			}
+			else
+			{
+				minX = selX;
+				minY = selY;
+				width = height = 1;
+			}
+
+			g2d.enableBlend();
+			g2d.setColor(0.9F, 1F, 0.9F, 0.8F);
+			g2d.begin(true);
+			g2d.drawRect(minX * scl, minY * scl, width * scl, height * scl);
+			g2d.end();
+			g2d.disableBlend();
+
+			g2d.setColor(Color.GREEN);
+			g2d.begin(false);
+			g2d.drawRect(minX * scl, minY * scl, width * scl, height * scl);
+			g2d.end();
+
+			g2d.end();
+		}
+		else if(selectingCircuitIO)
+		{
+			g2d.enableBlend();
+			g2d.setColor(1F, 1F, 1F, 0.8F);
+			g2d.begin(true);
+			g2d.drawRect(startX * scl, startY * scl, (endX + 1) * scl, (endY + 1) * scl);
+			g2d.end();
+			g2d.disableBlend();
+
+			for(int x = circuitToIO.xCoord; x < circuitToIO.xCoord + circuitToIO.width; x++)
+			{
+				for(int y = circuitToIO.yCoord; y < circuitToIO.yCoord + circuitToIO.height; y++)
+				{
+					Tile tile = world.grid(x, y);
+					Piece p = tile.getPiece();
+					if(p.isAir())
+						continue;
+					int meta = tile.getMeta();
+					p.paintPiece(g2d, world, x * 10, y * 10, x, y, meta, true);
+				}
+			}
+
+			g2d.enableBlend();
+			g2d.setColor(0.5F, 0.5F, 0.5F, 0.2F);
+			g2d.begin(true);
+
+			for (int x = 0; x < circuitToIO.width; x++)
+			{
+				g2d.drawRect(circuitToIO.xCoord + x * scl, (circuitToIO.yCoord - 1) * scl, scl, scl);
+				g2d.drawRect(circuitToIO.xCoord + x * scl, (circuitToIO.yCoord + circuitToIO.height) * scl, scl, scl);
+			}
+			g2d.drawRect(circuitToIO.xCoord * scl, (circuitToIO.yCoord - 1) * scl, circuitToIO.width * scl, scl);
+			g2d.drawRect(circuitToIO.xCoord * scl, (circuitToIO.yCoord + circuitToIO.height) * scl, circuitToIO.width * scl, scl);
+			g2d.drawRect((circuitToIO.xCoord - 1) * scl, circuitToIO.yCoord * scl, scl, circuitToIO.height * scl);
+			g2d.drawRect((circuitToIO.xCoord + circuitToIO.width) * scl, circuitToIO.yCoord * scl, scl, circuitToIO.height * scl);
+
+			if(circuitToIO.isOnEdge(selX, selY))
+			{
+				g2d.setColor(0.7F, 0.7F, 0.1F, 0.2F);
+				g2d.drawRect(selX * scl, selY * scl, scl, scl);
+			}
+
+			g2d.end();
+			g2d.disableBlend();
+		}
 		else
 		{
 			if(!world.getPiece(selX, selY).isAir())
 			{
 				g2d.setColor(0.7F, 0.7F, 0.1F);
 				g2d.begin(false);
+				g2d.drawRect(selX * scl, selY * scl, scl, scl);
+				g2d.end();
+			}
+			else if(world.hasParent() && world.isOnEdge(selX, selY))
+			{
+				g2d.setColor(0.9F, 0.4F, 0.4F);
+				g2d.begin(true);
 				g2d.drawRect(selX * scl, selY * scl, scl, scl);
 				g2d.end();
 			}
@@ -212,6 +393,7 @@ public class Powered extends GuiScreen
 		g2d.drawString(5, 30, world.getPiece(selX, selY).name + " (" + meta + ")");
 		g2d.drawString(5, 45, MathUtil.intBin(meta));
 		g2d.drawString(5, 60, "FPS: " + Gdx.graphics.getFramesPerSecond());
+		g2d.drawString(5, 75, "View: " + view);
 		g2d.endString();
 
 		if(msg != null)
@@ -240,7 +422,7 @@ public class Powered extends GuiScreen
 		g2d.drawString(g2d.width - 470, g2d.height - 20, "Mouse buttons to place and remove");
 		g2d.endString();
 	}
-	
+
 	public void setMessage(String message, long millis)
 	{
 		msgTime = System.currentTimeMillis() + millis;
@@ -251,25 +433,79 @@ public class Powered extends GuiScreen
 	{
 		Affine2 aft = new Affine2();
 
-        float zoomWidth = (float) (Main.WIDTH * zoom);
-		float zoomHeight = (float) (Main.HEIGHT * zoom);
+        float zoomWidth = (float) (Main.WIDTH * view.zoom);
+		float zoomHeight = (float) (Main.HEIGHT * view.zoom);
 
 		float anchorx = (Main.WIDTH - zoomWidth) / 2;
 		float anchory = (Main.HEIGHT - zoomHeight) / 2;
 
         aft.translate(anchorx, anchory);
-		aft.scale((float) zoom, (float) zoom);
-		aft.translate((float) moveX, (float) moveY);
+		aft.scale((float) view.zoom, (float) view.zoom);
+		aft.translate((float) view.moveX, (float) view.moveY);
 		
 		return aft;
 	}
 
 	private void resetCursor()
 	{
+		circuitStart = null;
 		copyStart = null;
 		isCopying = isCutting = isPasting = false;
 		copySelected = -1;
 		held = null;
+		setSelectedPiece(1);
+	}
+
+
+	private void copyBlueprint(Blueprint blueprint)
+	{
+		if(copied.size() == 20)
+			copied.remove(19);
+		copied.add(0, blueprint);
+		System.out.println("blueprint = " + Blueprint.exportString(blueprint.toJson()));
+//		System.out.println("blueprint = " + Json.write(blueprint.toJson()));
+	}
+
+	private void setSelectedPiece(int n)
+	{
+		if(selectingCircuitIO)
+			return;
+
+		selectedCircuit = false;
+		selected = MathUtil.between(1, n, Pieces.all.length - 1);
+		setMessage("Selected " + Pieces.all[selected].name, 2000);
+	}
+
+	public void pushWorld(World world)
+	{
+		worlds.push(this.world);
+		views.push(this.view);
+
+		this.world = world;
+		this.view = new View();
+		reset();
+		resetCursor();
+	}
+
+	public void popWorld()
+	{
+		if(worlds.isEmpty())
+			return;
+
+		world = worlds.pop();
+		view = views.pop();
+		resetCursor();
+	}
+
+	@Override
+	public void onBack()
+	{
+		if(selectingCircuitIO)
+		{
+			selectingCircuitIO = false;
+			circuitToIO = null;
+		}
+		popWorld();
 	}
 
 	@Override
@@ -277,11 +513,15 @@ public class Powered extends GuiScreen
 	{
 		if(isCopying)
 		{
+			if(button != Input.Buttons.LEFT) return;
+
 			Vector2 mi = new Vector2(x, y);
 			Affine2 aft = applyCameraTransform().inv();
 			aft.applyTo(mi);
 			int px = (int) Math.floor(mi.x / scl);
 			int py = (int) Math.floor(mi.y / scl);
+			px = MathUtil.between(0, px, world.width - 1);
+			py = MathUtil.between(0, py, world.height - 1);
 			if(copyStart == null)
 				copyStart = new Point(px, py);
 
@@ -291,6 +531,13 @@ public class Powered extends GuiScreen
 				int minY = Math.min(py, copyStart.y);
 				int maxX = Math.max(px, copyStart.x);
 				int maxY = Math.max(py, copyStart.y);
+
+				if(!Blueprint.canCopy(world, minX, minY, maxX, maxY))
+				{
+					resetCursor();
+					setMessage("Cannot copy, clipping circuit", 1500);
+					return;
+				}
 
 				Blueprint blueprint = new Blueprint(world, minX, minY, maxX, maxY);
 				copyBlueprint(blueprint);
@@ -303,16 +550,7 @@ public class Powered extends GuiScreen
 							world.setToAir(cx, cy, false);
 					}
 
-					for (int cx = minX; cx <= maxX; cx++)
-					{
-						world.notifyNeighbor(cx, minY, Side.NORTH);
-						world.notifyNeighbor(cx, maxY, Side.SOUTH);
-					}
-					for (int cy = minY; cy <= maxY; cy++)
-					{
-						world.notifyNeighbor(minX, cy, Side.WEST);
-						world.notifyNeighbor(maxX, cy, Side.EAST);
-					}
+					world.notifyNeighbors(minX, minY, maxX, maxY);
 				}
 
 				held = blueprint;
@@ -331,62 +569,139 @@ public class Powered extends GuiScreen
 			aft.applyTo(mi);
 			int px = (int) Math.floor(mi.x / scl);
 			int py = (int) Math.floor(mi.y / scl);
-
-			for (int i = 0; i < held.width; i++)
-			{
-				for (int j = 0; j < held.height; j++)
-				{
-					Blueprint.TileSnapshot snapshot = held.grid(i, j);
-
-					if (snapshot != null && !snapshot.getPiece().isAir())
-					{
-						Piece piece = snapshot.getPiece();
-						int meta = snapshot.getMeta();
-						world.setPiece(px + i, py + j, piece, meta, 2);
-						if(snapshot.hasData() && snapshot.getData() != null)
-							world.getData(px + i, py + j).loadFromJson(snapshot.getData());
-					}
-					else
-						world.setPiece(px + i, py + j, Pieces.AIR, 0, 2);
-				}
-			}
-
-			for (int i = 0; i < held.width; i++) {
-				for (int j = 0; j < held.height; j++) {
-					Blueprint.TileSnapshot snapshot = held.grid(i, j);
-
-					if (snapshot != null && !snapshot.getPiece().isAir())
-						snapshot.getPiece().onPaste(world, held, px + i, py + j);
-				}
-			}
-
-			int minX = MathUtil.between(0, px, world.width);
-			int minY = MathUtil.between(0, py, world.height);
-			int maxX = Math.min(px + held.width, world.width);
-			int maxY = Math.min(py + held.height, world.height);
-
-			for (int cx = minX; cx < maxX; cx++)
-			{
-				world.notifyNeighbor(cx, minY, Side.NORTH);
-				world.notifyNeighbor(cx, maxY - 1, Side.SOUTH);
-			}
-			for (int cy = minY; cy < maxY; cy++)
-			{
-				world.notifyNeighbor(minX, cy, Side.WEST);
-				world.notifyNeighbor(maxX - 1, cy, Side.EAST);
-			}
-			for (int cx = minX; cx < maxX; cx++)
-			{
-				world.notifyNeighbor(cx, minY - 1, Side.SOUTH, false);
-				world.notifyNeighbor(cx, maxY, Side.NORTH, false);
-			}
-			for (int cy = minY; cy < maxY; cy++)
-			{
-				world.notifyNeighbor(minX - 1, cy, Side.EAST, false);
-				world.notifyNeighbor(maxX, cy, Side.WEST, false);
-			}
-
+			held.pasteBlueprint(world, px, py, true);
+			copied.remove(held);
+			copied.add(0, held);
 			resetCursor();
+		}
+		else if(selectedCircuit)
+		{
+			if(button != Input.Buttons.LEFT) return;
+
+			Vector2 mi = new Vector2(x, y);
+			Affine2 aft = applyCameraTransform().inv();
+			aft.applyTo(mi);
+			int px = MathUtil.between(0, (int) Math.floor(mi.x / scl), world.width - 1);
+			int py = MathUtil.between(0, (int) Math.floor(mi.y / scl), world.height - 1);
+			if(circuitStart == null)
+				circuitStart = new Point(px, py);
+
+			if(!pressed)
+			{
+				int minX = Math.min(px, circuitStart.x);
+				int minY = Math.min(py, circuitStart.y);
+				int maxX = Math.max(px, circuitStart.x);
+				int maxY = Math.max(py, circuitStart.y);
+
+				Gdx.input.getTextInput(new Input.TextInputListener() {
+					@Override
+					public void input(String text)
+					{
+						text = text.toLowerCase().trim();
+//						text = text.replaceAll("\\s", "");
+						while(text.startsWith("\"") || text.startsWith("'"))
+							text = text.substring(1).trim();
+						while(text.endsWith("\"") || text.endsWith("'"))
+							text = text.substring(0, text.length() - 1).trim();
+
+						String[] sp = text.split("x");
+						if(sp.length == 0)
+						{
+							setMessage("invalid format, use [width]x[height]!", 2000);
+							return;
+						}
+						if(sp.length == 1)
+						{
+							setMessage("invalid format, missing 'x'!", 2000);
+							return;
+						}
+						if(sp.length > 2)
+						{
+							setMessage("invalid format, too many 'x's!", 2000);
+							return;
+						}
+						int worldWidth, worldHeight;
+						String s;
+
+						try
+						{
+							s = sp[0].trim();
+							while(s.endsWith("\"") || s.endsWith("'"))
+								s = s.substring(0, s.length() - 1).trim();
+							worldWidth = Integer.parseInt(s);
+						}
+						catch (NumberFormatException e)
+						{
+							setMessage("invalid format, width isn't a number!", 2000);
+							return;
+						}
+						if(worldWidth <= 0)
+						{
+							setMessage("width must be greater than 0!", 2000);
+							return;
+						}
+						if(worldWidth > 1024)
+						{
+							setMessage("width must be less than 1025!", 2000);
+							return;
+						}
+
+						try
+						{
+							s = sp[1].trim();
+							while(s.startsWith("\"") || s.startsWith("'"))
+								s = s.substring(1).trim();
+							worldHeight = Integer.parseInt(s);
+						}
+						catch (NumberFormatException e)
+						{
+							setMessage("invalid format, height isn't a number!", 2000);
+							return;
+						}
+						if(worldHeight <= 0)
+						{
+							setMessage("height must be greater than 0!", 2000);
+							return;
+						}
+						if(worldHeight > 1024)
+						{
+							setMessage("height must be less than 1025!", 2000);
+							return;
+						}
+
+						world.createCircuit(minX, minY, maxX, maxY, worldWidth, worldHeight);
+					}
+
+					@Override
+					public void canceled() {}
+				}, "Create Circuit\n(enter circuit width and height like so: \"[width]x[height]\", ex \"9x20\", \"128x128\")", "", "[width]x[height]");
+
+				resetCursor();
+				setSelectedPiece(1);
+			}
+		}
+		else if(selectingCircuitIO)
+		{
+			if(pressed || dragging) return;
+
+			Vector2 mi = new Vector2(x, y);
+			Affine2 aft = applyCameraTransform().inv();
+			aft.applyTo(mi);
+			int px = (int) Math.floor(mi.x / scl);
+			int py = (int) Math.floor(mi.y / scl);
+//			px = MathUtil.between(0, px, world.width - 1);
+//			py = MathUtil.between(0, py, world.height - 1);
+
+			if(world.inBounds(px, py) && circuitToIO.isOnEdge(px, py))
+			{
+				circuitToIO.disconnectWorld(px, py);
+				circuitToIO.connect(ioStart.x, ioStart.y, px, py);
+
+				selectingCircuitIO = false;
+				ioStart = null;
+				circuitToIO = null;
+				world.game.popWorld();
+			}
 		}
 		else
 		{
@@ -397,25 +712,37 @@ public class Powered extends GuiScreen
 			aft.applyTo(mi);
 			int px = (int) Math.floor(mi.x / scl);
 			int py = (int) Math.floor(mi.y / scl);
-			Piece p = world.getPiece(px, py);
-			if(button == Input.Buttons.LEFT)
-			{
-				if(p.isAir())
-					world.setPiece(px, py, Pieces.all[selected], true);
-				else
-					p.onInteract(world, px, py);
-			}
-			else if(button == Input.Buttons.RIGHT)
-				world.setToAir(px, py, true);
-		}
-	}
 
-	private void copyBlueprint(Blueprint blueprint)
-	{
-		if(copied.size() == 20)
-			copied.remove(19);
-		copied.add(0, blueprint);
-		System.out.println("blueprint = " + Blueprint.exportString(blueprint.toJson()));
+			if(world.inBounds(px, py))
+			{
+				Piece p = world.getPiece(px, py);
+				if(button == Input.Buttons.LEFT)
+				{
+					if(p.isAir())
+					{
+						Piece placed = Pieces.all[selected];
+						world.setPiece(px, py, placed, true);
+						placed.onPlaced(world, px, py);
+					}
+					else
+						p.onInteract(world, px, py);
+				}
+				else if(button == Input.Buttons.RIGHT)
+					world.setToAir(px, py, true);
+			}
+			else if(world.hasParent() && world.isOnEdge(px, py))
+			{
+				Circuit circuit = world.circuit;
+				ioStart = new Point(px, py);
+				circuit.disconnectEdge(px, py);
+				selectingCircuitIO = true;
+				circuitToIO = circuit;
+
+				pushWorld(world.parent);
+				view.lookAt(this, circuit.xCoord + circuit.width / 2F, circuit.yCoord + circuit.height / 2F);
+				view.zoom = 5;
+			}
+		}
 	}
 
 	@Override
@@ -430,8 +757,8 @@ public class Powered extends GuiScreen
 		}
 		else
 		{
-			zoom *= 1 - amt / 10.0;
-			zoom = MathUtil.between(1, zoom, 10);
+			view.zoom *= 1 - amt / 10.0;
+			view.zoom = MathUtil.between(1, view.zoom, 10);
 		}
 	}
 
@@ -440,7 +767,7 @@ public class Powered extends GuiScreen
 	{
 		if(pressed) return;
 
-		if(key == Input.Keys.X)
+		if(key == Input.Keys.X && !selectingCircuitIO)
 		{
 			if (Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT))
 			{
@@ -450,17 +777,15 @@ public class Powered extends GuiScreen
 			else
 				paused = !paused;
 		}
-		else if(key == Input.Keys.C)
+		else if(key == Input.Keys.C && !selectingCircuitIO)
 		{
 			if(Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT))
 			{
 				resetCursor();
 				isCopying = true;
 			}
-			else
-				reset();
 		}
-		else if(key == Input.Keys.V)
+		else if(key == Input.Keys.V && !selectingCircuitIO)
 		{
 			if(Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT))
 			{
@@ -473,7 +798,7 @@ public class Powered extends GuiScreen
 				}
 			}
 		}
-		else if(key == Input.Keys.I)
+		else if(key == Input.Keys.I && !selectingCircuitIO)
 		{
 			if(Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT))
 			{
@@ -484,7 +809,10 @@ public class Powered extends GuiScreen
 						Blueprint blueprint = null;
 						try
 						{
-							blueprint = Blueprint.fromJson(Blueprint.importString(text));
+							JsonObject obj = Blueprint.importString(text);
+							System.out.println("imported json:\n" + obj);
+							blueprint = Blueprint.fromJson(obj);
+							System.out.println("blueprint = " + blueprint);
 						}
 						catch (Exception ex)
 						{
@@ -509,21 +837,38 @@ public class Powered extends GuiScreen
 		}
 		else if(key == Input.Keys.G)
 		{
-			grid = !grid;
+			view.grid = !view.grid;
 		}
-		else if(key == Input.Keys.S)
+		else if(key == Input.Keys.S && !selectingCircuitIO)
 		{
 			step = true;
 		}
 		else if(key == Input.Keys.Q)
 		{
-			resetCursor();
+			if(selectingCircuitIO)
+				onBack();
+			else
+				resetCursor();
 		}
-		else if(intCodes.containsKey(key))
+		else if(key == Input.Keys.T)
 		{
-			int n = intCodes.get(key);
-			selected = MathUtil.between(1, n, Pieces.all.length - 1);
-			setMessage("Selected " + Pieces.all[selected].name, 2000);
+			Vector2 mi = main.unproject(Gdx.input.getX(), Gdx.input.getY());
+			Affine2 aft = applyCameraTransform().inv();
+			aft.applyTo(mi);
+			float px = (int) Math.floor(mi.x / scl);
+			float py = (int) Math.floor(mi.y / scl);
+
+			view.lookAt(this, px + 0.5F, py + 0.5F);
+		}
+		else if(intCodes.containsKey(key) && !selectingCircuitIO)
+		{
+			setSelectedPiece(intCodes.get(key));
+		}
+		else if(key == Input.Keys.TAB && !selectingCircuitIO)
+		{
+			resetCursor();
+			selectedCircuit = true;
+			setMessage("Selected Machine", 2000);
 		}
 	}
 
@@ -540,12 +885,23 @@ public class Powered extends GuiScreen
 		intCodes.put(Input.Keys.NUM_7, 7);
 		intCodes.put(Input.Keys.NUM_8, 8);
 		intCodes.put(Input.Keys.NUM_9, 9);
-		intCodes.put(Input.Keys.NUM_0, 10);
+	}
+
+	public static class View
+	{
+		public double zoom = 2, moveX, moveY, lastX, lastY;
+		public boolean grid = true;
+
+		@Override
+		public String toString()
+		{
+			return moveX + ", " + moveY + " (" + zoom + ")";
+		}
+
+		public void lookAt(Powered powered, float xCoord, float yCoord)
+		{
+			moveX = Main.WIDTH / 2D - xCoord * powered.scl;
+			moveY = Main.HEIGHT / 2D - yCoord * powered.scl;
+		}
 	}
 }
-
-// some shit
-// 2b0s2ihd0mv16dokce422ue7bswqdv9jillv0y5x9eslt9br5mkogrsqmob7jby6acn820ppevsgzc94p4buo97tvutj4dfna9l1oio98fo8rwf7mus3m2oa7rbmz2ojw98y32n3w603dulvtdxywdfbqov5iq8zxmmeeo76bn6f0asfm15bw657nxc1kjoe4xbb5chqx91lagyuy0v2gb5pj6wpdcxde30ivivntozpng3uj1godby9owsyoz1vjiywq27v38brfgli5ecw7bd85qlni2jkd4haulw4oaf2exm0o73s4fxxuyftr1dfw7lo8rw4vwc1ql964yyxzx47udncq9fip7hl53obbgbuhrjenz2unqf3vgcv4gwmqv84cby53z85llz7267hru7dvgfqug9m19gldayyzyf8iy7ifn9xstjxez5b8tubkfukgirf8z9maaes5cposyyo4m9kwihuase6n11ra8z2xeenkyjbwyn9pphphzjx4o4zw3rvehn0f43yz994gpw7e446b22dt88is7u9ez2uklhu6ipgpolptxav1231xzump0vm8bfscxqo4l1d4zdyqz5ktrex7mlhvmv39bk3b9pzzx4r7hfhf0fx4ors6qhyvpu7ye1t16cga2snyx0vwj26dcurdrmypm44wiphksjpjnpu5h5j4a3wkizluz47rp92tk9g1n05pwueomlzxq9zel24o3c2ch7lryaahxrd3xiyyo473rh0o3z5t6mzf8s5uf3c5akk5b7o62za0c7hglppuyr54kbbi02ivbrb9iyf3o3c2vcq57slsyhuc65rcm3f4ly5eijhc3elw2itvyf8fu2adrfozfb1d7obetdrisv1zcxlkpr9n0apo2mzuu2gyb9yb8p5il763o9ehr1d68u3e91amgkjflmc5sldr1naw560bxgikyf1ugfmcyak2rc57y23j0j6qw80wcedjrzpkvqdje3semlzdy7k6ysrqbf0sp28ij1pshn17td824lwlulm1focn7bvckopgs7nlfvxp8m410k9nd5qsbbyxg6ynhi3iklhiflgb81t2e7knmoj9tf8hr1lltcehwmyi2od5t7rg8ovuj8m3bdyx2y9dj9zjqub4tsea9yyzzgjpvjaqx20gs4mie3r2aue6xon30ycruztjjnbibxg033kow5rj7m8eqkxv424e7nxtu5ajlj99sv9wf417vktna3u2dqxktcznggh0um88erzk0vu271e0ku2hn4h2awtluievrv4992inwg89zhnc3bi78jy9qhzrz74ht1oyguzyp2xv3i87b6nx
-
-// half-adder
-// 3wow6uxdxkpbz3xjql2sfbcsuqw1m8qnsves126m11djfc4e2yjm9x1qeuujgqucjr9bjlz5jwun2et03fdxp9c5ubbz1adtqlw8qwvozmfceelvc5jjbcemfjpyrdxu1htj691agfsa0aev4y735es80m365ycra308mpdefl9p92u31q85nw1y0hiktc1w6jic6donrpdlg1jcgoflmiobqumjrgijl7bvfv352gkbmbfe178nasujxr71hywo8b26v4erawie5wpj2pzy29avfx99zefnzdr1brea0whe6m3vs5i82qzwtnqtwtjewnm05qi8qimfxcbt0vfe3svhcsa06jke3hdimjzu66x0oslx56bsoufibhfio2n3tji4ja2fvjhwvybut7mcta9xdirf173qng2i8d217zmb0yfs25mf8i6ss78urpgod2ygw8864n4mw87ccpw83pog4pl9in7kqrz57k6opd168dv0evn58pfmic2g8pelbl1srqn0ynpfsw0pzm15rfgbcbgj5lg8qggah6a0xo4pozufuiyyevq31j2ntt6g40nzdma62qvf5fr5qfafpifuovntxorrzytf3t1swv5m4qixj4l2y3nodv8nykuokh8exr302n6m1rorryqt1vlbhgwxxrnjbg0eths596o9pfklr9ehde3hfulf9cwo57bu5hxirevxvxzkn5f92fmtskters1zqk2uy5us8j1bna7q0key062ugz0ui6xbz30uucrhnqt957q84g1o1op85hl4hkhkwc9k8yhu418ytyn66xzstzsjg3wsnvshuoiq1m365d4ox47h6sbpaswo3kdv2857rnexg5hqbhy6etg2n6fjxhb6wsg6x46oklwyp0qod52pkfbe9sudyh90ax99k3w813l92sok0p3r8uc5mr6r0h1vqvs3az93nklxml

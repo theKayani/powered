@@ -7,10 +7,8 @@ import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.math.Vector2;
 import com.hk.engine.G2D;
 import com.hk.engine.GDXMain;
-import com.hk.engine.Handler;
 import com.hk.engine.util.ImageRegister;
 import com.hk.engine.util.Version;
-import com.hk.game.TestScreen;
 import powered.Powered;
 
 import java.util.Iterator;

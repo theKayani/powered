@@ -10,11 +10,11 @@ public class TestDesktop
 	public static void main (String[] args)
 	{
 		LwjglApplicationConfiguration config = new LwjglApplicationConfiguration();
-		config.title = "titties";
+		config.title = "Powered";
 		config.width = 1280;
 		config.height = 720;
-		config.backgroundFPS = 0;
-		config.foregroundFPS = 0;
+		config.backgroundFPS = 60;
+		config.foregroundFPS = 60;
 		config.vSyncEnabled = false;
 		new LwjglApplication(new GDXMain(), config);
 	}

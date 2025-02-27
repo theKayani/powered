@@ -46,27 +46,38 @@ public class LogicalPiece extends Piece
 	public boolean onAdded(World world, int x, int y)
 	{
 		onNeighborChanged(world, x, y, null);
-		return super.onAdded(world, x, y);
+		return true;
 	}
 	
 	public void onNeighborChanged(World world, int x, int y, Side side)
 	{
 		int meta = world.getMeta(x, y);
 		int old = meta;
-		meta = world.powerProvided(x, y + Side.NORTH.yOff, Side.SOUTH) > 0 ? meta | 1 : meta & ~1;
-		meta = world.powerProvided(x, y + Side.SOUTH.yOff, Side.NORTH) > 0 ? meta | 2 : meta & ~2;
+		if(side == null)
+		{
+			meta = world.powerProvided(x, y + Side.NORTH.yOff, Side.SOUTH) > 0 ? meta | 1 : meta & ~1;
+			meta = world.powerProvided(x, y + Side.SOUTH.yOff, Side.NORTH) > 0 ? meta | 2 : meta & ~2;
+		}
+		else if(side.isVertical())
+		{
+			if(world.powerProvided(x, y + side.yOff, side.getOpposite()) > 0)
+				meta |= 1 << side.ordinal();
+			else
+				meta &= ~(1 << side.ordinal());
+		}
 		if(meta != old)
 		{
 			world.setMeta(x, y, meta);
-			world.notifyNeighbors(x, y);
+			world.notifyNeighbor(x, y, Side.EAST);
+//			world.notifyNeighbors(x, y);
 		}
 	}
 
 	@Override
 	public void onPaste(World world, Blueprint blueprint, int x, int y)
 	{
-		world.notifyNeighbor(x, y, Side.NORTH);
-		world.notifyNeighbor(x, y, Side.SOUTH);
+//		world.notifyNeighbor(x, y, Side.NORTH);
+//		world.notifyNeighbor(x, y, Side.SOUTH);
 		world.notifyNeighbor(x, y, Side.EAST);
 	}
 

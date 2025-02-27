@@ -150,16 +150,28 @@ public class G2D
 		renderer.arc(x, y, radius, sa, ea - sa);
 		return this;
 	}
-	
+
 	public G2D drawCircle(float x, float y, float radius)
 	{
 		renderer.circle(getCenteredX(x + radius, radius * 2), getCenteredY(y + radius, radius * 2), radius);
 		return this;
 	}
-	
+
+	public G2D drawCircle(float x, float y, float radius, int segments)
+	{
+		renderer.circle(getCenteredX(x + radius, radius * 2), getCenteredY(y + radius, radius * 2), radius, segments);
+		return this;
+	}
+
 	public G2D drawOval(float x, float y, float w, float h)
 	{
 		renderer.ellipse(getCenteredX(x, w), getCenteredY(y, h), w, h);
+		return this;
+	}
+
+	public G2D drawTriangle(float x1, float y1, float x2, float y2, float x3, float y3)
+	{
+		renderer.triangle(x1, y1, x2, y2, x3, y3);
 		return this;
 	}
 	

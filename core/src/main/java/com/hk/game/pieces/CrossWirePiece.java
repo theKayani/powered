@@ -5,6 +5,9 @@ import com.hk.engine.G2D;
 import powered.Side;
 import powered.World;
 
+import java.util.AbstractMap;
+import java.util.Map;
+
 public class CrossWirePiece extends WirePiece
 {
 	public CrossWirePiece(String name)
@@ -36,8 +39,14 @@ public class CrossWirePiece extends WirePiece
 	
 	public boolean onAdded(World world, int x, int y)
 	{
-		int meta = getPower(world, x, y, true);
-		meta |= getPower(world, x, y, false) << 4;
+		int meta = 0;
+		Map.Entry<Integer, Integer> entry1 = getPower(world, x, y, true);
+		Map.Entry<Integer, Integer> entry2 = getPower(world, x, y, false);
+
+		meta |= entry1.getKey();
+		meta |= entry2.getKey() << 4;
+		meta |= (entry1.getValue() | entry2.getValue()) << 8;
+
 		world.setMeta(x, y, meta);
 		return true;
 	}
@@ -49,13 +58,17 @@ public class CrossWirePiece extends WirePiece
 
 		if(side.isVertical())
 		{
-			meta &= ~0xF;
-			meta |= getPower(world, x, y, true);
+			meta &= ~0x30F;
+			Map.Entry<Integer, Integer> entry = getPower(world, x, y, true);
+			meta |= entry.getValue();
+			meta |= entry.getKey() << 8;
 		}
 		else
 		{
-			meta &= ~0xF0;
-			meta |= getPower(world, x, y, false) << 4;
+			meta &= ~0xCF0;
+			Map.Entry<Integer, Integer> entry = getPower(world, x, y, false);
+			meta |= entry.getValue() << 4;
+			meta |= entry.getKey() << 8;
 		}
 		if(meta != old)
 		{
@@ -66,34 +79,46 @@ public class CrossWirePiece extends WirePiece
 		}
 	}
 	
-	protected int getPower(World world, int x, int y, boolean vertical)
+	protected Map.Entry<Integer, Integer> getPower(World world, int x, int y, boolean vertical)
 	{
 		Side[] sides = vertical ? Side.VERTICAL : Side.HORIZONTAL;
+		int input = 0;
 		int pwr = 0;
 		for(Side side : sides)
 		{
 			Piece p = world.getPiece(x + side.xOff, y + side.yOff);
-			if(p.canTransfer(world, x + side.xOff, y + side.yOff, side.getOpposite()))
+			if(world.canTransfer(x + side.xOff, y + side.yOff, side.getOpposite()))
 			{
 				int pv = world.powerProvided(x + side.xOff, y + side.yOff, side.getOpposite());
 				if(p instanceof WirePiece)
 					pv--;
-				pwr = Math.max(pwr, pv);
+
+				if(pv > pwr)
+				{
+					pwr = pv;
+					input = 0;
+				}
+				if (pwr > 0 && pv == pwr)
+					input |= 1 << side.ordinal();
 			}
 		}
-		return pwr & 0xF;
+		return new AbstractMap.SimpleEntry<>(input, pwr & 0xF);
 	}
 	
 	public int powerProvided(World world, int x, int y, Side to)
 	{
+		int meta = world.getMeta(x, y);
+		if((meta & 1 << to.ordinal() + 8) != 0)
+			return 0;
+
 		switch(to)
 		{
 			case NORTH:
 			case SOUTH:
-				return world.getMeta(x, y) & 0xF;
+				return meta & 0xF;
 			case WEST:
 			case EAST:
-				return (world.getMeta(x, y) >> 4) & 0xF;
+				return (meta >> 4) & 0xF;
 			default:
 				throw new AssertionError(to.name());
 		}

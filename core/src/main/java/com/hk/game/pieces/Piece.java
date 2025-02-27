@@ -42,12 +42,18 @@ public class Piece
 	
 	public void onNeighborChanged(World world, int x, int y, Side side)
 	{}
-	
+
+	/**
+	 * @return true to notify neighbors
+	 */
 	public boolean onAdded(World world, int x, int y)
 	{
 		return true;
 	}
-	
+
+	public void onPlaced(World world, int x, int y)
+	{}
+
 	public void onMetaChanged(World world, int x, int y, int om, int nm)
 	{}
 	
@@ -67,12 +73,17 @@ public class Piece
 	{
 		return null;
 	}
-	
+
 	public boolean isAir()
 	{
 		return this == Pieces.AIR;
 	}
-	
+
+	public boolean isCircuit()
+	{
+		return this == Pieces.CIRCUIT;
+	}
+
 	public int getDefaultMeta()
 	{
 		return 0;
@@ -81,5 +92,11 @@ public class Piece
 	public int cleanMeta(int oldMeta)
 	{
 		return oldMeta;
+	}
+
+	@Override
+	public String toString()
+	{
+		return "'" + name + "' {" + shortName + "}";
 	}
 }

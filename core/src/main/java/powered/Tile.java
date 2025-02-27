@@ -29,6 +29,8 @@ public class Tile
 		this.piece = piece;
 		this.meta = meta;
 		this.data = piece.createData(world, x, y, meta);
+		if(data instanceof World.Ticker)
+			world.addTicker(x, y, data);
 	}
 
 	public void setPiece(Piece piece)
@@ -53,7 +55,12 @@ public class Tile
 
 	public void setData(TileData data)
 	{
-		this.data = data;
+		if(!Objects.equals(this.data, data))
+		{
+			this.data = data;
+			if(data instanceof World.Ticker)
+				world.addTicker(x, y, data);
+		}
 	}
 
 	public TileData getData()

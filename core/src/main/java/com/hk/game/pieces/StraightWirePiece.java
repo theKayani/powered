@@ -5,6 +5,8 @@ import com.hk.engine.G2D;
 import powered.Side;
 import powered.World;
 
+import java.util.Map;
+
 public class StraightWirePiece extends CrossWirePiece
 {
 	public StraightWirePiece(String name)
@@ -45,7 +47,10 @@ public class StraightWirePiece extends CrossWirePiece
 	{
 		int meta = world.getMeta(x, y);
 		boolean vertical = (meta & 16) != 0;
-		meta = getPower(world, x, y, vertical) | (vertical ? 16 : 0);
+		Map.Entry<Integer, Integer> entry = getPower(world, x, y, vertical);
+		meta = (vertical ? 16 : 0);
+		meta |= entry.getValue();
+		meta |= entry.getKey() << 5;
 		world.setMeta(x, y, meta);
 		return true;
 	}
@@ -58,8 +63,13 @@ public class StraightWirePiece extends CrossWirePiece
 
 		if(vertical == side.isVertical())
 		{
-			meta &= ~0xF;
-			meta |= getPower(world, x, y, vertical);
+			if(vertical)
+				meta &= ~0b001101111;
+			else
+				meta &= ~0b110001111;
+			Map.Entry<Integer, Integer> entry = getPower(world, x, y, vertical);
+			meta |= entry.getValue();
+			meta |= entry.getKey() << 5;
 		}
 		if(meta != old)
 		{
@@ -74,6 +84,8 @@ public class StraightWirePiece extends CrossWirePiece
 	{
 		int meta = world.getMeta(x, y);
 		boolean vertical = (meta & 16) != 0;
+		if((meta & 1 << to.ordinal() + 5) != 0)
+			return 0;
 
 		if(to.isVertical() == vertical)
 			return meta & 0xF;
@@ -83,6 +95,20 @@ public class StraightWirePiece extends CrossWirePiece
 	@Override
 	public void onInteract(World world, int x, int y)
 	{
+		int meta = world.getMeta(x, y);
+		boolean vertical = (meta & 16) != 0;
+		if(!vertical)
+		{
+			boolean canNorth = world.canTransfer(x, y - 1, Side.SOUTH);
+			boolean canSouth = world.canTransfer(x, y + 1, Side.NORTH);
+			if(canNorth && canSouth)
+			{
+				world.setMeta(x, y, 16);
+				world.notifyNeighbors(x, y);
+				return;
+			}
+		}
+
 		world.setPiece(x, y, Pieces.WIRE, true);
 	}
 

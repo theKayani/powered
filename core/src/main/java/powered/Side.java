@@ -40,6 +40,30 @@ public enum Side
 		}
 		throw new AssertionError(this);
 	}
+
+	public Side rotate90()
+	{
+		switch(this)
+		{
+			case NORTH: return EAST;
+			case SOUTH: return WEST;
+			case WEST: return NORTH;
+			case EAST: return SOUTH;
+		}
+		throw new AssertionError(this);
+	}
+
+	public Side rotateCounter90()
+	{
+		switch(this)
+		{
+			case NORTH: return WEST;
+			case SOUTH: return EAST;
+			case WEST: return SOUTH;
+			case EAST: return NORTH;
+		}
+		throw new AssertionError(this);
+	}
 	
 	public static Side get(int index)
 	{
@@ -51,6 +75,7 @@ public enum Side
 		return values().length;
 	}
 
-	public static Side[] HORIZONTAL = { WEST, EAST };
-	public static Side[] VERTICAL = { NORTH, SOUTH };
+	public static final Side[] HORIZONTAL = { WEST, EAST };
+	public static final Side[] VERTICAL = { NORTH, SOUTH };
+	public static final Side[][] CORNERS = { { NORTH, EAST }, { SOUTH, WEST }, { WEST, NORTH }, { EAST, SOUTH } };
 }
